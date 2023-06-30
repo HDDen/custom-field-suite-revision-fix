@@ -1,11 +1,11 @@
 <?php
 /*
 Plugin Name: Custom field suite revision fix
-Author: Takayuki Miyauchi
-Plugin URI: http://firegoby.jp/
+Author: HDDen
+Plugin URI: https://github.com/HDDen/custom-field-suite-revision-fix
 Description: Fix revision and preview issue for Custom Field Suite Plugin
 Version: 0.1.0
-Author URI: http://firegoby.jp/
+Author URI: https://github.com/HDDen/
 */
 
 
@@ -20,105 +20,81 @@ function __construct()
 
 public function plugins_loaded()
 {
-    add_action('cfs_init', array($this, 'cfs_init'), 0);
-    add_action('wp_insert_post', array($this, 'wp_insert_post'));
-    add_filter('get_post_metadata', array($this, 'get_post_metadata'), 10, 4 );
-
-    add_shortcode('cfs_get', function($p){
-        extract(shortcode_atts(array(
-            'key' => false,
-            'id' => 0,
-            'format' => array(),
-        ), $p));
-        return self::get($key, $id, $format);
-    });
+    add_action( 'wp_restore_post_revision', array($this, 'restore_post_revision'), 10, 2 );
 }
 
-public function get($key, $id = 0, $format = array())
-{
-    global $cfs;
-    if (intval($this->get_preview_id($id))) {
-        return $cfs->get($key, $this->get_preview_id($id), $format);
-    } elseif ($id = $this->get_preview_id(get_the_ID())) {
-        return $cfs->get($key, $id, $format);
-    } else {
-        return $cfs->get($key, get_the_ID(), $format);
-    }
-}
+public function restore_post_revision($post_ID, $revision_id){
 
-public function cfs_init()
-{
-    if (isset($_POST['wp-preview']) && $_POST['wp-preview'] === 'dopreview') {
-        global $cfs;
-        remove_action('cfs_init', array($cfs->form, 'init'));
-    }
-}
+    global $wpdb;
 
-public function get_preview_id( $post_id )
-{
-    global $post;
-    $preview_id = 0;
-    if (isset($post->ID) && intval($post->ID) === intval($post_id) && is_preview()
-            && $preview = wp_get_post_autosave($post->ID)) {
-        $preview_id = $preview->ID;
-    }
-    return $preview_id;
-}
+    $wpdb->query($wpdb->prepare(
+        "DELETE FROM $wpdb->postmeta WHERE post_id = %d",
+        $post_ID
+    ));
 
-public function get_post_metadata( $return, $post_id, $meta_key, $single ) {
-    if ($preview_id = $this->get_preview_id($post_id)) {
-        if ($post_id !== $preview_id) {
-            $return = get_post_meta($preview_id, $meta_key, $single);
-        }
-    }
-    return $return;
-}
+    $src_fields = CFS()->find_fields(array(
+        'post_id' => $revision_id,
+    ));
+    $post_meta = get_post_meta($revision_id);
+    
+    $result_fields = array();
 
-public function wp_insert_post($post_ID)
-{
-    if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) {
-        return;
-    }
+    // делаем прогон, основываясь на post_meta
+    foreach ($post_meta as $post_meta_name => $post_meta_values){
 
-    if (defined('DOING_AJAX') && DOING_AJAX) {
-        return;
-    }
+        // нужно понять, принадлежит поле к циклу или простому значению
+        $post_meta_forLoop = false;
+        $post_meta_forLoopName = '';
 
-    if (wp_is_post_revision($post_ID)) {
-        global $wpdb;
-        global $cfs;
-
-        $wpdb->query($wpdb->prepare(
-            "DELETE FROM $wpdb->postmeta WHERE post_id = %d",
-            $post_ID
-        ));
-
-        $cfs->form->session = new cfs_session();
-        $session = $cfs->form->session->get();
-
-        $field_groups = array();
-        if (isset($session['field_groups'])) {
-            $field_groups = $session['field_groups'];
-        }
-
-        foreach ($field_groups as $key => $val) {
-            $field_groups[$key] = (int) $val;
-        }
-
-        $options = array(
-            'format' => 'input',
-            'field_groups' => $field_groups
-        );
-
-        $cfs->save($_POST['cfs']['input'], array('ID' => $post_ID), $options);
-
-        $post_metas = array('meta');
-        foreach ( $post_metas as $post_meta ) {
-            foreach ( $_POST[$post_meta] as $meta_id => $meta_arr ) {
-                add_metadata('post', $post_ID, $meta_arr['key'], $meta_arr['value']);
+        foreach ($src_fields as $src_field_info) {
+            if (isset($src_field_info['name']) && ($post_meta_name === $src_field_info['name'])){
+                // нашли поле, проверяем, установлен ли родитель
+                if (isset($src_field_info['parent_id']) && $src_field_info['parent_id']){
+                    $post_meta_forLoop = $src_field_info['parent_id'];
+                    break;
+                }
             }
         }
+
+        // проверку провели, нашли id родителя. по id нужно найти теперь его и его имя
+        if ($post_meta_forLoop){
+            foreach ($src_fields as $src_field_info) {
+                if (isset($src_field_info['id']) && ($post_meta_forLoop === (int)$src_field_info['id'])){
+                    // нашли поле, изымаем name
+                    if (isset($src_field_info['name'])){
+                        $post_meta_forLoopName = $src_field_info['name'];
+                        break;
+                    }
+                }
+            }
+        }
+
+        // имя получили, теперь нужно добавить его элемент в результирующий массив
+        if ($post_meta_forLoopName){
+            
+            $temp_array = array();
+
+            // разбиваем значения по отдельным массивам
+            foreach ($post_meta_values as $post_meta_value){
+                $temp_array[] = array(
+                    $post_meta_name => $post_meta_value,
+                );
+            }
+
+            // либо переопределяем, либо объединяем
+            if (!isset($result_fields[$post_meta_forLoopName])){
+                $result_fields[$post_meta_forLoopName] = $temp_array;
+            } else {
+                $result_fields[$post_meta_forLoopName] = array_replace_recursive($result_fields[$post_meta_forLoopName], $temp_array);
+            }
+        } else {
+            // простое поле
+            $result_fields[$post_meta_name] = array_reverse($post_meta_values)[0];
+        }
+        
     }
+    
+    CFS()->save( $result_fields, array('ID' => $post_ID) );
 }
 
 }
