@@ -20,7 +20,34 @@ function __construct()
 
 public function plugins_loaded()
 {
+    add_action( 'save_post', array($this, 'save_post'), 10, 2 );
     add_action( 'wp_restore_post_revision', array($this, 'restore_post_revision'), 10, 2 );
+    add_filter( '_wp_post_revision_fields', array($this, 'wp_post_revision_fields') );
+    add_filter( '_wp_post_revision_field_my_meta', array($this, 'wp_post_revision_field_my_meta'), 10, 2 );
+}
+
+public function save_post($post_id, $post){
+    $parent_id = wp_is_post_revision( $post_id );
+
+	if ( $parent_id ) {
+
+		$parent  = get_post( $parent_id );
+		$my_meta = get_post_meta( $parent->ID, '_wp_page_template', true );
+
+		if ( false !== $my_meta )
+			add_metadata( 'post', $post_id, '_wp_page_template', $my_meta );
+
+	}
+}
+
+public function wp_post_revision_fields($fields){
+    $fields['_wp_page_template'] = 'Шаблон страницы';
+	return $fields;
+}
+
+public function wp_post_revision_field_my_meta($value, $field){
+    global $revision;
+	return get_metadata( 'post', $revision->ID, $field, true );
 }
 
 public function restore_post_revision($post_ID, $revision_id){
@@ -32,6 +59,18 @@ public function restore_post_revision($post_ID, $revision_id){
         $post_ID
     ));
 
+    // восстановление шаблона
+    $post     = get_post( $post_ID );
+	$revision = get_post( $revision_id );
+	$my_meta  = get_metadata( 'post', $revision->ID, '_wp_page_template', true );
+
+	if ( false !== $my_meta )
+		update_post_meta( $post_ID, '_wp_page_template', $my_meta );
+	else
+		delete_post_meta( $post_ID, '_wp_page_template' );
+
+
+    // кастомные поля
     $src_fields = CFS()->find_fields(array(
         'post_id' => $revision_id,
     ));
