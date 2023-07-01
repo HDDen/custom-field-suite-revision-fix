@@ -4,7 +4,7 @@ Plugin Name: Custom field suite revision fix
 Author: HDDen
 Plugin URI: https://github.com/HDDen/custom-field-suite-revision-fix
 Description: Fix revision and preview issue for Custom Field Suite Plugin
-Version: 0.1.0
+Version: 0.1.1
 Author URI: https://github.com/HDDen/
 */
 
